@@ -99,7 +99,7 @@ func main() {
 	// Start server
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "3001" // Changed from "8080" to "3001"
 	}
 
 	slog.Info("Server starting", "port", port)
