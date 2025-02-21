@@ -91,19 +91,20 @@ func main() {
 
 	// CORS setup
 	c := cors.New(cors.Options{
-		AllowedOrigins: []string{"http://localhost:3000"},
-		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE"},
-		AllowedHeaders: []string{"Content-Type"},
+		AllowedOrigins:   []string{"http://localhost:3000", "http://54.226.1.246:3000"}, // Add your frontend URL
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowCredentials: true,
 	})
 
 	// Start server
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "3001" // Changed from "8080" to "3001"
+		port = "3001"
 	}
 
 	slog.Info("Server starting", "port", port)
-	log.Fatal(http.ListenAndServe(":"+port, c.Handler(r)))
+	log.Fatal(http.ListenAndServe("0.0.0.0:"+port, c.Handler(r))) // Change localhost to 0.0.0.0
 }
 
 func NewPg(ctx context.Context, dbConfig *DBConfig) (*pgxpool.Pool, error) {
