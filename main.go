@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/cors"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Expense struct {
@@ -22,6 +24,15 @@ type Expense struct {
 	Amount      float64   `json:"amount"`
 	Category    string    `json:"category"`
 	Date        time.Time `json:"date"`
+}
+
+type User struct {
+	ID           int       `json:"id"`
+	Username     string    `json:"username"`
+	Email        string    `json:"email"`
+	Password     string    `json:"password,omitempty"`
+	PasswordHash string    `json:"-"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type App struct {
@@ -84,6 +95,11 @@ func main() {
 
 	// Router setup
 	r := mux.NewRouter()
+
+	// Auth routes
+	r.HandleFunc("/api/auth/signup", app.signup).Methods("POST")
+
+	// Existing expense routes
 	r.HandleFunc("/api/expenses", app.getExpenses).Methods("GET")
 	r.HandleFunc("/api/expenses", app.createExpense).Methods("POST")
 	r.HandleFunc("/api/expenses/{id}", app.updateExpense).Methods("PUT")
@@ -141,6 +157,7 @@ func NewPg(ctx context.Context, dbConfig *DBConfig) (*pgxpool.Pool, error) {
 }
 
 func (app *App) initDB(ctx context.Context) error {
+	// Create expenses table
 	_, err := app.DBClient.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS expenses (
 			id SERIAL PRIMARY KEY,
@@ -148,6 +165,20 @@ func (app *App) initDB(ctx context.Context) error {
 			amount DECIMAL(10,2) NOT NULL,
 			category TEXT NOT NULL,
 			date TIMESTAMP NOT NULL
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
+	// Create users table
+	_, err = app.DBClient.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS users (
+			id SERIAL PRIMARY KEY,
+			username VARCHAR(255) NOT NULL UNIQUE,
+			email VARCHAR(255) NOT NULL UNIQUE,
+			password_hash VARCHAR(255) NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	return err
@@ -246,4 +277,44 @@ func (app *App) deleteExpense(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (app *App) signup(w http.ResponseWriter, r *http.Request) {
+	var user User
+	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Hash the password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, "Error processing password", http.StatusInternalServerError)
+		return
+	}
+
+	// Insert the new user
+	err = app.DBClient.QueryRow(r.Context(),
+		`INSERT INTO users (username, email, password_hash) 
+		 VALUES ($1, $2, $3) 
+		 RETURNING id, created_at`,
+		user.Username, user.Email, string(hashedPassword),
+	).Scan(&user.ID, &user.CreatedAt)
+
+	if err != nil {
+		if strings.Contains(err.Error(), "unique constraint") {
+			http.Error(w, "Username or email already exists", http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Clear sensitive data before sending response
+	user.Password = ""
+	user.PasswordHash = ""
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(user)
 }
