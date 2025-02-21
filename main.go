@@ -8,14 +8,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/cors"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type Expense struct {
@@ -24,15 +22,6 @@ type Expense struct {
 	Amount      float64   `json:"amount"`
 	Category    string    `json:"category"`
 	Date        time.Time `json:"date"`
-}
-
-type User struct {
-	ID           int       `json:"id"`
-	Username     string    `json:"username"`
-	Email        string    `json:"email"`
-	Password     string    `json:"password,omitempty"`
-	PasswordHash string    `json:"-"`
-	CreatedAt    time.Time `json:"created_at"`
 }
 
 type App struct {
@@ -57,11 +46,9 @@ var (
 )
 
 func main() {
-	// Create a root context with cancellation
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Initialize database configuration
 	dbConfig := &DBConfig{
 		Host:              "localhost",
 		Port:              5432,
@@ -75,7 +62,6 @@ func main() {
 		HealthCheckPeriod: 2 * time.Minute,
 	}
 
-	// Create the connection pool
 	db, err := NewPg(rootCtx, dbConfig)
 	if err != nil {
 		slog.Error("Error connecting to database", "error", err)
@@ -87,67 +73,55 @@ func main() {
 		DBClient: db,
 	}
 
-	// Initialize database schema
 	if err := app.initDB(rootCtx); err != nil {
 		slog.Error("Error initializing database", "error", err)
 		os.Exit(1)
 	}
 
-	// Router setup
 	r := mux.NewRouter()
 
-	// Auth routes
-	r.HandleFunc("/api/auth/signup", app.signup).Methods("POST")
-
-	// Existing expense routes
+	// Expense routes
 	r.HandleFunc("/api/expenses", app.getExpenses).Methods("GET")
 	r.HandleFunc("/api/expenses", app.createExpense).Methods("POST")
 	r.HandleFunc("/api/expenses/{id}", app.updateExpense).Methods("PUT")
 	r.HandleFunc("/api/expenses/{id}", app.deleteExpense).Methods("DELETE")
 
-	// CORS setup
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000", "http://54.226.1.246:3000"}, // Add your frontend URL
+		AllowedOrigins:   []string{"http://localhost:3000", "http://54.226.1.246:3000"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowedHeaders:   []string{"Content-Type"},
 		AllowCredentials: true,
 	})
 
-	// Start server
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "3001"
 	}
 
 	slog.Info("Server starting", "port", port)
-	log.Fatal(http.ListenAndServe("0.0.0.0:"+port, c.Handler(r))) // Change localhost to 0.0.0.0
+	log.Fatal(http.ListenAndServe("0.0.0.0:"+port, c.Handler(r)))
 }
 
 func NewPg(ctx context.Context, dbConfig *DBConfig) (*pgxpool.Pool, error) {
-	// Build connection string
 	connString := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s?sslmode=disable",
 		dbConfig.UserName, dbConfig.Password, dbConfig.Host, dbConfig.Port, dbConfig.DBName)
 
-	// Parse the pool configuration
 	config, err := pgxpool.ParseConfig(connString)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing pool config: %w", err)
 	}
 
-	// Apply pool-specific configurations
 	config.MaxConns = dbConfig.MaxConns
 	config.MinConns = dbConfig.MinConns
 	config.MaxConnLifetime = dbConfig.MaxConnLifeTime
 	config.MaxConnIdleTime = dbConfig.MaxConnIdleTime
 	config.HealthCheckPeriod = dbConfig.HealthCheckPeriod
 
-	// Create new pool instance each time for tests
 	db, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create connection pool: %w", err)
 	}
 
-	// Verify the connection
 	if err = db.Ping(ctx); err != nil {
 		return nil, fmt.Errorf("unable to ping database: %w", err)
 	}
@@ -157,7 +131,6 @@ func NewPg(ctx context.Context, dbConfig *DBConfig) (*pgxpool.Pool, error) {
 }
 
 func (app *App) initDB(ctx context.Context) error {
-	// Create expenses table
 	_, err := app.DBClient.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS expenses (
 			id SERIAL PRIMARY KEY,
@@ -165,20 +138,6 @@ func (app *App) initDB(ctx context.Context) error {
 			amount DECIMAL(10,2) NOT NULL,
 			category TEXT NOT NULL,
 			date TIMESTAMP NOT NULL
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	// Create users table
-	_, err = app.DBClient.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS users (
-			id SERIAL PRIMARY KEY,
-			username VARCHAR(255) NOT NULL UNIQUE,
-			email VARCHAR(255) NOT NULL UNIQUE,
-			password_hash VARCHAR(255) NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	return err
@@ -217,16 +176,13 @@ func (app *App) createExpense(w http.ResponseWriter, r *http.Request) {
 
 	err := app.DBClient.QueryRow(r.Context(),
 		"INSERT INTO expenses (description, amount, category, date) VALUES ($1, $2, $3, $4) RETURNING id",
-		expense.Description, expense.Amount, expense.Category, expense.Date,
-	).Scan(&expense.ID)
-
+		expense.Description, expense.Amount, expense.Category, expense.Date).Scan(&expense.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(expense)
 }
 
@@ -240,81 +196,27 @@ func (app *App) updateExpense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := app.DBClient.Exec(r.Context(),
+	_, err := app.DBClient.Exec(r.Context(),
 		"UPDATE expenses SET description=$1, amount=$2, category=$3, date=$4 WHERE id=$5",
-		expense.Description, expense.Amount, expense.Category, expense.Date, id,
-	)
-
+		expense.Description, expense.Amount, expense.Category, expense.Date, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if result.RowsAffected() == 0 {
-		http.Error(w, "Expense not found", http.StatusNotFound)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(expense)
 }
 
 func (app *App) deleteExpense(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	result, err := app.DBClient.Exec(r.Context(),
-		"DELETE FROM expenses WHERE id=$1", id,
-	)
-
+	_, err := app.DBClient.Exec(r.Context(), "DELETE FROM expenses WHERE id=$1", id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if result.RowsAffected() == 0 {
-		http.Error(w, "Expense not found", http.StatusNotFound)
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (app *App) signup(w http.ResponseWriter, r *http.Request) {
-	var user User
-	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Hash the password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
-	if err != nil {
-		http.Error(w, "Error processing password", http.StatusInternalServerError)
-		return
-	}
-
-	// Insert the new user
-	err = app.DBClient.QueryRow(r.Context(),
-		`INSERT INTO users (username, email, password_hash) 
-		 VALUES ($1, $2, $3) 
-		 RETURNING id, created_at`,
-		user.Username, user.Email, string(hashedPassword),
-	).Scan(&user.ID, &user.CreatedAt)
-
-	if err != nil {
-		if strings.Contains(err.Error(), "unique constraint") {
-			http.Error(w, "Username or email already exists", http.StatusConflict)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Clear sensitive data before sending response
-	user.Password = ""
-	user.PasswordHash = ""
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(user)
 }
