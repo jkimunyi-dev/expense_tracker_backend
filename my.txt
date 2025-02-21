@@ -1,0 +1,14 @@
+# Connect to PostgreSQL as postgres user
+sudo -u postgres psql
+
+# Inside psql, create a new user (replace 'myuser' with your desired username)
+CREATE USER admin WITH PASSWORD 'admin';
+
+# Create a new database
+CREATE DATABASE expense_tracker;
+
+# Grant privileges to the user on the database
+GRANT ALL PRIVILEGES ON DATABASE expense_tracker TO admin;
+
+# Exit psql
+\q
